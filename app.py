@@ -79,11 +79,19 @@ st.markdown("""
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def get_api_key():
+    # 1. Najpierw sprawdź Streamlit Secrets
     try:
         key = st.secrets.get("API_FOOTBALL_KEY", "")
+        if key and key.strip():
+            return key.strip()
     except Exception:
-        key = ""
-    return key or os.getenv("API_FOOTBALL_KEY", "")
+        pass
+    # 2. Zmienna środowiskowa
+    key = os.getenv("API_FOOTBALL_KEY", "")
+    if key and key.strip():
+        return key.strip()
+    # 3. Wbudowany klucz (backup)
+    return "0d23d52b76f1a10a78b8b5c3e3c13a1b"
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -93,7 +101,10 @@ def search_teams(name: str, api_key: str) -> tuple:
     url = "https://v3.football.api-sports.io/teams"
     headers = {"x-apisports-key": api_key}
     try:
-        r = requests.get(url, headers=headers, params={"search": name}, timeout=15)
+        # Usuń polskie znaki które psują kodowanie
+        import unicodedata
+        name_ascii = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('ascii')
+        r = requests.get(url, headers=headers, params={"search": name_ascii}, timeout=15)
         data = r.json()
         errors = data.get("errors", {})
         if errors:
@@ -332,12 +343,6 @@ with st.sidebar:
     st.markdown("---")
 
     api_key = get_api_key()
-    if not api_key:
-        api_key = st.text_input(
-            "🔑 Klucz API",
-            type="password",
-            placeholder="Wklej klucz z api-football.com…",
-        )
 
     season = st.selectbox("📅 Sezon", [2025, 2024, 2023, 2026], index=0)
     st.markdown("---")
@@ -354,11 +359,6 @@ with st.sidebar:
 st.markdown("# ⚽ Predykcja Meczu Piłkarskiego")
 st.markdown("Wyszukaj dwie drużyny i sprawdź przewidywany wynik — z analizą formy, H2H i rankingiem ELO.")
 st.markdown("---")
-
-if not api_key:
-    st.warning("⚠️ Wklej klucz API w panelu bocznym.")
-    st.info("Zdobądź darmowy klucz na [dashboard.api-football.com](https://dashboard.api-football.com/register)")
-    st.stop()
 
 st.markdown("### 🔍 Wybierz drużyny")
 col1, col2 = st.columns(2)
