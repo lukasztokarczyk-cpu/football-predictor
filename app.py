@@ -329,7 +329,7 @@ with st.sidebar:
             placeholder="Wklej klucz z api-football.com…",
         )
 
-    season = st.selectbox("📅 Sezon", [2024, 2023], index=0)
+    season = st.selectbox("📅 Sezon", [2025, 2024, 2023, 2026], index=0)
     st.markdown("---")
     st.markdown("""
 **ℹ️ Jak zdobyć klucz:**
