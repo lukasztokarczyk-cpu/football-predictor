@@ -87,11 +87,21 @@ def get_api_key():
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def search_teams(name: str, api_key: str) -> list:
-    from api import APIFootballClient
-    client = APIFootballClient(api_key)
-    data = client._get("/teams", {"search": name})
-    return data.get("response", [])
+def search_teams(name: str, api_key: str) -> tuple:
+    """Zwraca (lista_drużyn, komunikat_błędu)."""
+    import requests
+    url = "https://v3.football.api-sports.io/teams"
+    headers = {"x-apisports-key": api_key}
+    try:
+        r = requests.get(url, headers=headers, params={"search": name}, timeout=15)
+        data = r.json()
+        errors = data.get("errors", {})
+        if errors:
+            return [], f"Błąd API: {errors}"
+        results = data.get("response", [])
+        return results, None
+    except Exception as e:
+        return [], str(e)
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -362,14 +372,14 @@ with col1:
 
     if home_search and len(home_search) >= 3:
         with st.spinner("Szukam…"):
-            home_results = search_teams(home_search, api_key)
+            home_results, home_err = search_teams(home_search, api_key)
         if home_results:
             home_options = {f"{t['team']['name']} ({t['team'].get('country','')})": t for t in home_results[:10]}
             home_choice = st.selectbox("Wybierz", list(home_options.keys()), key="home_choice")
             home_team = home_options[home_choice]
             st.success(f"✅ {home_team['team']['name']}")
         else:
-            st.error("Nie znaleziono. Spróbuj innej nazwy.")
+            st.error(f"Nie znaleziono. {home_err or 'Spróbuj innej nazwy (min. 3 znaki, po angielsku).'}")
 
 with col2:
     st.markdown("**✈️ Gość**")
@@ -377,14 +387,14 @@ with col2:
 
     if away_search and len(away_search) >= 3:
         with st.spinner("Szukam…"):
-            away_results = search_teams(away_search, api_key)
+            away_results, away_err = search_teams(away_search, api_key)
         if away_results:
             away_options = {f"{t['team']['name']} ({t['team'].get('country','')})": t for t in away_results[:10]}
             away_choice = st.selectbox("Wybierz", list(away_options.keys()), key="away_choice")
             away_team = away_options[away_choice]
             st.success(f"✅ {away_team['team']['name']}")
         else:
-            st.error("Nie znaleziono. Spróbuj innej nazwy.")
+            st.error(f"Nie znaleziono. {away_err or 'Spróbuj innej nazwy (min. 3 znaki, po angielsku).'}")
 
 st.markdown("<br>", unsafe_allow_html=True)
 predict_btn = st.button(
