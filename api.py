@@ -11,7 +11,7 @@ import requests
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://www.thesportsdb.com/api/v1/json/3"
+BASE_URL = "https://www.thesportsdb.com/api/v1/json/123"
 
 # Liga ID w TheSportsDB
 LEAGUES = {
@@ -59,11 +59,20 @@ class TheSportsDBClient:
             return {}
 
     def get_league_teams(self, league_id: str, season: str = "2024-2025") -> list:
-        """Pobiera drużyny z ligi."""
-        data = self._get(f"lookup_all_teams.php?id={league_id}")
-        teams = data.get("teams") or []
-        for t in teams:
-            t["_league_id"] = league_id
+        """Pobiera drużyny z ligi przez tabelę (darmowy endpoint)."""
+        data = self._get(f"lookuptable.php?l={league_id}&s={season}")
+        table = data.get("table") or []
+        teams = []
+        seen = set()
+        for row in table:
+            tid = row.get("idTeam")
+            if tid and tid not in seen:
+                seen.add(tid)
+                teams.append({
+                    "idTeam": tid,
+                    "strTeam": row.get("strTeam", ""),
+                    "strTeamAlternate": "",
+                })
         return teams
 
     def get_all_teams(self) -> list:
