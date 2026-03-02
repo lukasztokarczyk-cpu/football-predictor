@@ -1,9 +1,8 @@
 """
-app.py - Predykcja meczu piłkarskiego (football-data.org)
+app.py - Predykcja meczu (TheSportsDB - darmowe, bez klucza, Ekstraklasa!)
 """
 
 import streamlit as st
-import os
 from datetime import datetime
 
 st.set_page_config(page_title="⚽ Predykcja Meczu", page_icon="⚽", layout="wide")
@@ -12,7 +11,7 @@ st.markdown("""
 <style>
     .main { background-color: #0e1117; }
     h1 { color: #00d4aa !important; }
-    .vs-card { background: linear-gradient(135deg,#1a1f2e,#16213e); border:1px solid #2d3561; border-radius:16px; padding:30px; margin:20px 0; box-shadow:0 8px 32px rgba(0,0,0,.4); }
+    .vs-card { background:linear-gradient(135deg,#1a1f2e,#16213e); border:1px solid #2d3561; border-radius:16px; padding:30px; margin:20px 0; box-shadow:0 8px 32px rgba(0,0,0,.4); }
     .team-name { font-size:1.6rem; font-weight:900; color:#fff; text-align:center; }
     .vs-text { font-size:2rem; font-weight:900; color:#fbbf24; text-align:center; padding-top:20px; }
     .prob-box { border-radius:12px; padding:20px 10px; text-align:center; font-weight:700; }
@@ -22,39 +21,31 @@ st.markdown("""
     .prob-number { font-size:2.5rem; }
     .best-score { background:#0f3460; color:#00d4aa; border-radius:10px; padding:10px 28px; font-size:2.2rem; font-weight:900; border:2px solid #00d4aa; display:inline-block; }
     .stat-row { background:#12172a; border-radius:8px; padding:10px 16px; margin:6px 0; display:flex; justify-content:space-between; font-size:.9rem; }
-    #MainMenu { visibility:hidden; } footer { visibility:hidden; }
+    #MainMenu{visibility:hidden;} footer{visibility:hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-from api import FootballDataClient, convert_match_to_fixture, FREE_COMPETITIONS
+from api import TheSportsDBClient, convert_event_to_fixture, LEAGUES
 
-def get_api_key():
-    try:
-        k = st.secrets.get("FOOTBALL_DATA_KEY","")
-        if k and k.strip(): return k.strip()
-    except: pass
-    return os.getenv("FOOTBALL_DATA_KEY","0239f610e5474033ba919718886d7688")
+client = TheSportsDBClient()
 
-api_key = get_api_key()
-client = FootballDataClient(api_key)
-
-# ── Cache listy drużyn (raz na sesję) ────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_all_teams(api_key: str) -> list:
-    c = FootballDataClient(api_key)
-    return c.get_all_teams(season=2024)
+def load_all_teams() -> list:
+    c = TheSportsDBClient()
+    return c.get_all_teams()
 
 @st.cache_data(ttl=600, show_spinner=False)
-def fetch_prediction(home_id, away_id, home_name, away_name, api_key):
+def fetch_prediction(home_id: str, away_id: str, home_name: str, away_name: str) -> dict:
     from model import MatchPredictor, EloRating
-    c = FootballDataClient(api_key)
-    home_raw = c.get_team_matches(home_id, limit=20)
-    away_raw = c.get_team_matches(away_id, limit=20)
+    c = TheSportsDBClient()
+
+    home_raw = c.get_team_last_matches(home_id, limit=20)
+    away_raw = c.get_team_last_matches(away_id, limit=20)
     h2h_raw  = c.get_h2h(home_id, away_id, limit=10)
 
-    home_fix = [convert_match_to_fixture(m, home_id) for m in home_raw]
-    away_fix = [convert_match_to_fixture(m, away_id) for m in away_raw]
-    h2h_fix  = [convert_match_to_fixture(m, home_id) for m in h2h_raw]
+    home_fix = [convert_event_to_fixture(m, home_id) for m in home_raw]
+    away_fix = [convert_event_to_fixture(m, away_id) for m in away_raw]
+    h2h_fix  = [convert_event_to_fixture(m, home_id) for m in h2h_raw]
 
     home_stats = c.get_team_statistics(home_id)
     away_stats = c.get_team_statistics(away_id)
@@ -63,9 +54,15 @@ def fetch_prediction(home_id, away_id, home_name, away_name, api_key):
     elo.build_from_fixtures(home_fix + away_fix + h2h_fix)
     predictor = MatchPredictor(elo_ratings=elo)
 
+    # Konwertuj ID do int dla modelu
+    try: hid_int = int(home_id)
+    except: hid_int = 0
+    try: aid_int = int(away_id)
+    except: aid_int = 0
+
     fixture = {
         "fixture": {"id":0, "date": datetime.now().strftime("%Y-%m-%d")},
-        "teams": {"home":{"id":home_id,"name":home_name}, "away":{"id":away_id,"name":away_name}},
+        "teams": {"home":{"id":hid_int,"name":home_name}, "away":{"id":aid_int,"name":away_name}},
         "league": {"id":0,"name":"","country":""},
         "goals": {"home":None,"away":None},
     }
@@ -83,13 +80,13 @@ def fetch_prediction(home_id, away_id, home_name, away_name, api_key):
 
 def _summarize_h2h(matches, home_id, away_id, home_name, away_name):
     hw=dr=aw=0; last=[]
-    for m in sorted(matches, key=lambda x:x.get("utcDate",""), reverse=True)[:10]:
-        s=m.get("score",{}).get("fullTime",{})
-        gh,ga=s.get("home"),s.get("away")
-        if gh is None or ga is None: continue
-        is_home=(m.get("homeTeam",{}).get("id")==home_id)
+    for m in sorted(matches, key=lambda x: x.get("dateEvent",""), reverse=True)[:10]:
+        try: gh=int(m.get("intHomeScore") or -1); ga=int(m.get("intAwayScore") or -1)
+        except: continue
+        if gh<0 or ga<0: continue
+        is_home = (m.get("idHomeTeam","") == home_id)
         sc=gh if is_home else ga; co=ga if is_home else gh
-        date=m.get("utcDate","")[:10]
+        date=m.get("dateEvent","")[:10]
         if sc>co: hw+=1; last.append(f"{date}  ✅ {home_name} {sc}:{co} {away_name}")
         elif sc==co: dr+=1; last.append(f"{date}  🟡 {home_name} {sc}:{co} {away_name}")
         else: aw+=1; last.append(f"{date}  ❌ {home_name} {sc}:{co} {away_name}")
@@ -98,15 +95,15 @@ def _summarize_h2h(matches, home_id, away_id, home_name, away_name):
 
 def _form_details(matches, team_id):
     results=[]
-    for m in sorted(matches, key=lambda x:x.get("utcDate",""), reverse=True):
-        if m.get("status")!="FINISHED": continue
-        s=m.get("score",{}).get("fullTime",{})
-        gh,ga=s.get("home"),s.get("away")
-        if gh is None or ga is None: continue
-        is_home=(m.get("homeTeam",{}).get("id")==team_id)
+    for m in sorted(matches, key=lambda x: x.get("dateEvent",""), reverse=True):
+        if m.get("strStatus") != "Match Finished": continue
+        try: gh=int(m.get("intHomeScore") or -1); ga=int(m.get("intAwayScore") or -1)
+        except: continue
+        if gh<0 or ga<0: continue
+        is_home=(m.get("idHomeTeam","") == team_id)
         sc=gh if is_home else ga; co=ga if is_home else gh
-        opp=m.get("awayTeam" if is_home else "homeTeam",{}).get("name","?")
-        date=m.get("utcDate","")[:10]
+        opp=m.get("strAwayTeam" if is_home else "strHomeTeam","?")
+        date=m.get("dateEvent","")[:10]
         e="🟢" if sc>co else ("🟡" if sc==co else "🔴")
         results.append(f"{e} {date}  {'vs' if is_home else '@'} {opp}  **{sc}:{co}**")
         if len(results)>=5: break
@@ -171,26 +168,25 @@ def render_result(pred, home_name, away_name):
 with st.sidebar:
     st.markdown("## ⚽ Predykcja Meczu")
     st.markdown("---")
-    st.markdown("**Dostępne ligi (darmowy plan):**")
-    for code, name in FREE_COMPETITIONS.items():
+    st.markdown("**✅ Dostępne ligi:**")
+    for name in LEAGUES.keys():
         st.markdown(f"- {name}")
     st.markdown("---")
-    st.markdown("*Wpisz min. 3 litery nazwy drużyny po angielsku*")
+    st.markdown("*Wpisz min. 3 litery, działa po polsku i angielsku*")
 
 # ── GŁÓWNA STRONA ─────────────────────────────────────────────────────────────
 st.markdown("# ⚽ Predykcja Meczu Piłkarskiego")
-st.markdown("Wybierz dwie drużyny i sprawdź kto wygra.")
+st.markdown("Wybierz dwie drużyny i sprawdź kto wygra — z H2H, formą i rankingiem ELO.")
 st.markdown("---")
 
-# Załaduj drużyny (z cache)
-with st.spinner("Ładowanie listy drużyn… (tylko przy pierwszym uruchomieniu)"):
-    all_teams = load_all_teams(api_key)
+with st.spinner("Ładowanie drużyn ze wszystkich lig… (tylko raz)"):
+    all_teams = load_all_teams()
 
 if not all_teams:
-    st.error("Nie udało się pobrać listy drużyn. Sprawdź połączenie.")
+    st.error("Nie udało się pobrać listy drużyn.")
     st.stop()
 
-st.success(f"✅ Załadowano {len(all_teams)} drużyn z {len(FREE_COMPETITIONS)} lig")
+st.success(f"✅ Załadowano {len(all_teams)} drużyn z {len(LEAGUES)} lig (w tym Ekstraklasa!)")
 st.markdown("### 🔍 Wybierz drużyny")
 
 col1, col2 = st.columns(2)
@@ -198,45 +194,45 @@ home_team = away_team = None
 
 with col1:
     st.markdown("**🏠 Gospodarz**")
-    home_search = st.text_input("Wyszukaj gospodarz", placeholder="np. Barcelona, Liverpool, Legia…", key="hs")
+    home_search = st.text_input("Wyszukaj gospodarz", placeholder="np. Legia, Barcelona, Liverpool…", key="hs")
     if home_search and len(home_search) >= 3:
         results = client.search_teams_local(home_search, all_teams)
         if results:
-            opts = {f"{t.get('name','?')} — {t.get('_competition','')}": t for t in results[:15]}
+            opts = {f"{t.get('strTeam','?')} — {t.get('_competition','')}": t for t in results[:15]}
             choice = st.selectbox("Wybierz", list(opts.keys()), key="hc")
             home_team = opts[choice]
-            st.success(f"✅ {home_team.get('name','?')}")
+            st.success(f"✅ {home_team.get('strTeam','?')}")
         else:
-            st.warning("Nie znaleziono. Spróbuj innej nazwy (po angielsku).")
+            st.warning("Nie znaleziono. Spróbuj inaczej.")
 
 with col2:
     st.markdown("**✈️ Gość**")
-    away_search = st.text_input("Wyszukaj gość", placeholder="np. Real Madrid, Bayern…", key="as")
+    away_search = st.text_input("Wyszukaj gość", placeholder="np. Wisła, Real Madrid, Bayern…", key="as")
     if away_search and len(away_search) >= 3:
         results = client.search_teams_local(away_search, all_teams)
         if results:
-            opts = {f"{t.get('name','?')} — {t.get('_competition','')}": t for t in results[:15]}
+            opts = {f"{t.get('strTeam','?')} — {t.get('_competition','')}": t for t in results[:15]}
             choice = st.selectbox("Wybierz", list(opts.keys()), key="ac")
             away_team = opts[choice]
-            st.success(f"✅ {away_team.get('name','?')}")
+            st.success(f"✅ {away_team.get('strTeam','?')}")
         else:
-            st.warning("Nie znaleziono. Spróbuj innej nazwy (po angielsku).")
+            st.warning("Nie znaleziono. Spróbuj inaczej.")
 
 st.markdown("<br>", unsafe_allow_html=True)
 predict_btn = st.button("🔮 Oblicz predykcję", use_container_width=True, type="primary",
                          disabled=(home_team is None or away_team is None))
 
 if predict_btn and home_team and away_team:
-    home_id   = home_team.get("id")
-    away_id   = away_team.get("id")
-    home_name = home_team.get("name","?")
-    away_name = away_team.get("name","?")
+    home_id   = home_team.get("idTeam","")
+    away_id   = away_team.get("idTeam","")
+    home_name = home_team.get("strTeam","?")
+    away_name = away_team.get("strTeam","?")
     if home_id == away_id:
         st.error("Wybierz dwie różne drużyny!")
     else:
-        with st.spinner(f"Analizuję {home_name} vs {away_name}… (~30 sek.)"):
+        with st.spinner(f"Analizuję {home_name} vs {away_name}…"):
             try:
-                pred = fetch_prediction(home_id, away_id, home_name, away_name, api_key)
+                pred = fetch_prediction(home_id, away_id, home_name, away_name)
                 st.markdown("---")
                 render_result(pred, home_name, away_name)
             except Exception as e:
